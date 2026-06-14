@@ -1,12 +1,41 @@
-import { useRef } from 'react';
-import { KaleidoscopeScene } from '@/components/KaleidoscopeScene/KaleidoscopeScene';
-import { KaleidoscopePattern, KaleidoscopePatternHandle } from '@/components/PatternPreview/KaleidoscopePattern';
-import ControlPanel from '@/components/ControlPanel/ControlPanel';
-import ObjectToolbar from '@/components/ObjectToolbar/ObjectToolbar';
-import { Sparkles } from 'lucide-react';
+import { useRef, useCallback } from "react";
+import { KaleidoscopeScene } from "@/components/KaleidoscopeScene/KaleidoscopeScene";
+import {
+  KaleidoscopePattern,
+  KaleidoscopePatternHandle,
+} from "@/components/PatternPreview/KaleidoscopePattern";
+import ControlPanel from "@/components/ControlPanel/ControlPanel";
+import ObjectToolbar from "@/components/ObjectToolbar/ObjectToolbar";
+import { useKaleidoscopeStore } from "@/hooks/useKaleidoscopeStore";
+import { randomColor, randomRange } from "@/utils/geometry";
+import { Sparkles } from "lucide-react";
+import type { ObjectType } from "@/types";
 
 export default function Home() {
   const patternRef = useRef<KaleidoscopePatternHandle>(null);
+  const addObject = useKaleidoscopeStore((s) => s.addObject);
+
+  const handleDropObject = useCallback(
+    (type: ObjectType, position: [number, number, number]) => {
+      const color = randomColor();
+      addObject({
+        type,
+        position,
+        rotation: [
+          Math.random() * Math.PI,
+          Math.random() * Math.PI,
+          Math.random() * Math.PI,
+        ],
+        scale: randomRange(0.3, 0.5),
+        color,
+        emissive: color,
+        emissiveIntensity: randomRange(0.4, 0.8),
+        roughness: randomRange(0.2, 0.5),
+        metalness: randomRange(0.4, 0.8),
+      });
+    },
+    [addObject],
+  );
 
   return (
     <div className="relative w-full h-full bg-kaleido-bg overflow-hidden">
@@ -22,30 +51,39 @@ export default function Home() {
       />
 
       <div className="absolute top-4 left-4 z-20 flex items-center gap-3">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-kaleido-pink via-kaleido-purple to-kaleido-blue flex items-center justify-center shadow-glow-strong">
+        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-kaleido-pink via-kaleido-purple to-kaleido-blue flex items-center justify-center shadow-glow-strong animate-pulse-slow">
           <Sparkles size={24} className="text-white" />
         </div>
         <div>
           <h1 className="font-display text-2xl font-bold bg-gradient-to-r from-kaleido-pink via-kaleido-purple to-kaleido-blue bg-clip-text text-transparent">
             虚拟万花筒
           </h1>
-          <p className="text-xs text-white/40 font-body">Kaleidoscope Studio</p>
+          <p className="text-xs text-white/40 font-body">
+            Kaleidoscope Studio · 拖拽物体到场景/图案中
+          </p>
         </div>
       </div>
 
       <div className="absolute inset-0">
-        <KaleidoscopeScene className="w-full h-full" />
+        <KaleidoscopeScene
+          className="w-full h-full"
+          onDropObject={handleDropObject}
+        />
       </div>
 
       <div className="absolute top-1/2 left-8 -translate-y-1/2 z-10">
         <div className="flex flex-col items-center gap-4">
-          <KaleidoscopePattern ref={patternRef} size={420} />
+          <KaleidoscopePattern
+            ref={patternRef}
+            size={420}
+            onDropObject={handleDropObject}
+          />
           <div className="text-center">
             <p className="font-display text-sm text-white/60 tracking-wider">
               万花筒图案
             </p>
             <p className="text-xs text-white/30 mt-1 font-body">
-              实时预览对称花纹
+              拖拽物体至此 · 实时对称预览
             </p>
           </div>
         </div>
@@ -54,8 +92,12 @@ export default function Home() {
       <ControlPanel patternRef={patternRef} />
       <ObjectToolbar />
 
-      <div className="absolute bottom-4 left-4 z-10 text-xs text-white/30 font-body">
-        <p>拖拽场景旋转视角 · 滚轮缩放</p>
+      <div className="absolute bottom-4 left-4 z-10 text-xs text-white/30 font-body space-y-1">
+        <p className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-kaleido-green animate-pulse"></span>
+          拖拽工具栏物体到右侧场景或左侧图案
+        </p>
+        <p className="pl-3 opacity-70">拖拽场景旋转视角 · 滚轮缩放</p>
       </div>
     </div>
   );

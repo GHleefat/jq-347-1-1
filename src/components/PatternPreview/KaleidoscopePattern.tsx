@@ -1,407 +1,515 @@
-import { useRef, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react';
-import { useKaleidoscopeStore } from '@/hooks/useKaleidoscopeStore';
-import { RESOLUTION_MAP } from '@/types';
+import {
+  useRef,
+  useEffect,
+  useImperativeHandle,
+  forwardRef,
+  useCallback,
+  useState,
+  useMemo,
+} from "react";
+import { Canvas, useFrame, useThree, createPortal } from "@react-three/fiber";
+import * as THREE from "three";
+import { useKaleidoscopeStore } from "@/hooks/useKaleidoscopeStore";
+import type { KaleidoObject, ObjectType } from "@/types";
+import { RESOLUTION_MAP } from "@/types";
 
 export interface KaleidoscopePatternHandle {
   exportImage: (options?: {
     width?: number;
     height?: number;
-    format?: 'png' | 'jpg';
+    format?: "png" | "jpg";
     quality?: number;
   }) => Promise<string | null>;
   getCanvas: () => HTMLCanvasElement | null;
+  getSceneDropPosition: (
+    clientX: number,
+    clientY: number,
+  ) => [number, number, number];
 }
 
 interface KaleidoscopePatternProps {
   className?: string;
   size?: number;
+  onDropObject?: (type: ObjectType, position: [number, number, number]) => void;
 }
 
-export const KaleidoscopePattern = forwardRef<KaleidoscopePatternHandle, KaleidoscopePatternProps>(
-  ({ className, size = 400 }, ref) => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const animationRef = useRef<number>(0);
-    const timeRef = useRef<number>(0);
+const ObjectGeometry = ({ type }: { type: ObjectType }) => {
+  switch (type) {
+    case "sphere":
+      return <sphereGeometry args={[1, 32, 32]} />;
+    case "box":
+      return <boxGeometry args={[1, 1, 1]} />;
+    case "octahedron":
+      return <octahedronGeometry args={[1, 0]} />;
+    case "torus":
+      return <torusGeometry args={[0.7, 0.28, 16, 64]} />;
+    case "cone":
+      return <coneGeometry args={[1, 1.6, 32]} />;
+    case "tetrahedron":
+      return <tetrahedronGeometry args={[1, 0]} />;
+    case "icosahedron":
+      return <icosahedronGeometry args={[1, 0]} />;
+    case "dodecahedron":
+      return <dodecahedronGeometry args={[1, 0]} />;
+    default:
+      return <sphereGeometry args={[1, 32, 32]} />;
+  }
+};
 
-    const { objects, mirrorConfig, rotationConfig, exportConfig, setExporting } = useKaleidoscopeStore();
+function RenderObjects() {
+  const objects = useKaleidoscopeStore((s) => s.objects);
+  const rotationConfig = useKaleidoscopeStore((s) => s.rotationConfig);
+  const mirrorConfig = useKaleidoscopeStore((s) => s.mirrorConfig);
+  const groupRef = useRef<THREE.Group>(null);
 
-    const drawShape = useCallback(
-      (
-        ctx: CanvasRenderingContext2D,
-        type: string,
-        x: number,
-        y: number,
-        scale: number,
-        rotation: number,
-        color: string,
-        emissive: string,
-        emissiveIntensity: number
-      ) => {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(rotation);
-        ctx.scale(scale, scale);
+  useFrame((_, delta) => {
+    if (groupRef.current && rotationConfig.autoRotate) {
+      groupRef.current.rotation.z +=
+        delta * rotationConfig.speed * rotationConfig.direction * 0.5;
+    }
+  });
 
-        const glowRadius = 15 + emissiveIntensity * 25;
-        const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, glowRadius);
-        gradient.addColorStop(0, emissive + Math.floor(emissiveIntensity * 200).toString(16).padStart(2, '0'));
-        gradient.addColorStop(1, emissive + '00');
+  const mirrorAngleRad = (mirrorConfig.angle * Math.PI) / 180;
 
-        ctx.shadowColor = emissive;
-        ctx.shadowBlur = 10 + emissiveIntensity * 20;
-        ctx.fillStyle = color;
-        ctx.strokeStyle = emissive;
-        ctx.lineWidth = 1.5;
+  return (
+    <group ref={groupRef} rotation={[0, 0, mirrorAngleRad]}>
+      <ambientLight intensity={0.4} />
+      <pointLight
+        position={[0, 0, 4]}
+        intensity={3}
+        color="#b967ff"
+        distance={15}
+      />
+      <pointLight
+        position={[4, 0, -2]}
+        intensity={2}
+        color="#00f0ff"
+        distance={15}
+      />
+      <pointLight
+        position={[-4, 3, 1]}
+        intensity={2}
+        color="#ff2d95"
+        distance={15}
+      />
+      <pointLight
+        position={[0, -4, 0]}
+        intensity={1.5}
+        color="#ffd700"
+        distance={12}
+      />
+      <pointLight
+        position={[0, 0, -4]}
+        intensity={1.5}
+        color="#39ff14"
+        distance={15}
+      />
 
-        switch (type) {
-          case 'sphere':
-            ctx.beginPath();
-            ctx.arc(0, 0, 1, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.fillStyle = gradient;
-            ctx.globalAlpha = 0.5;
-            ctx.beginPath();
-            ctx.arc(0, 0, glowRadius / scale, 0, Math.PI * 2);
-            ctx.fill();
-            break;
+      {objects.map((obj) => (
+        <SingleObjectMesh key={obj.id} obj={obj} />
+      ))}
+    </group>
+  );
+}
 
-          case 'box':
-            ctx.fillRect(-1, -1, 2, 2);
-            ctx.strokeRect(-1, -1, 2, 2);
-            break;
+function SingleObjectMesh({ obj }: { obj: KaleidoObject }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const initialSeed = useRef(Math.random() * Math.PI * 2);
 
-          case 'octahedron':
-            ctx.beginPath();
-            for (let i = 0; i < 8; i++) {
-              const angle = (i / 8) * Math.PI * 2 - Math.PI / 2;
-              const r = i % 2 === 0 ? 1.2 : 0.6;
-              const px = Math.cos(angle) * r;
-              const py = Math.sin(angle) * r;
-              if (i === 0) ctx.moveTo(px, py);
-              else ctx.lineTo(px, py);
-            }
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            break;
+  useFrame(({ clock }) => {
+    if (meshRef.current) {
+      const t = clock.getElapsedTime() + initialSeed.current;
+      meshRef.current.rotation.x += 0.005;
+      meshRef.current.rotation.y += 0.007;
+      meshRef.current.position.z = obj.position[2] + Math.sin(t * 1.2) * 0.05;
+    }
+  });
 
-          case 'torus':
-            ctx.lineWidth = 0.4;
-            ctx.beginPath();
-            ctx.arc(0, 0, 1, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(0, 0, 0.5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            break;
+  const basePos: [number, number, number] = [
+    obj.position[0],
+    obj.position[1],
+    obj.position[2],
+  ];
+  const baseRot: [number, number, number] = [
+    obj.rotation[0],
+    obj.rotation[1],
+    obj.rotation[2],
+  ];
 
-          case 'cone':
-            ctx.beginPath();
-            ctx.moveTo(0, -1.2);
-            ctx.lineTo(1, 1);
-            ctx.lineTo(-1, 1);
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            break;
+  return (
+    <mesh ref={meshRef} position={basePos} rotation={baseRot} scale={obj.scale}>
+      <ObjectGeometry type={obj.type} />
+      <meshStandardMaterial
+        color={obj.color}
+        emissive={obj.emissive}
+        emissiveIntensity={obj.emissiveIntensity}
+        roughness={obj.roughness}
+        metalness={obj.metalness}
+      />
+    </mesh>
+  );
+}
 
-          case 'tetrahedron':
-            ctx.beginPath();
-            for (let i = 0; i < 3; i++) {
-              const angle = (i / 3) * Math.PI * 2 - Math.PI / 2;
-              const px = Math.cos(angle) * 1.2;
-              const py = Math.sin(angle) * 1.2;
-              if (i === 0) ctx.moveTo(px, py);
-              else ctx.lineTo(px, py);
-            }
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            break;
+const kaleidoscopeVertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
 
-          case 'icosahedron':
-            ctx.beginPath();
-            for (let i = 0; i < 20; i++) {
-              const angle = (i / 20) * Math.PI * 2;
-              const r = i % 2 === 0 ? 1.2 : 0.9;
-              const px = Math.cos(angle) * r;
-              const py = Math.sin(angle) * r;
-              if (i === 0) ctx.moveTo(px, py);
-              else ctx.lineTo(px, py);
-            }
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            break;
+const kaleidoscopeFragmentShader = `
+  uniform sampler2D uTexture;
+  uniform float uMirrorCount;
+  uniform float uTime;
+  uniform float uGlowIntensity;
+  varying vec2 vUv;
 
-          case 'dodecahedron':
-            ctx.beginPath();
-            for (let i = 0; i < 12; i++) {
-              const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
-              const r = 1.1;
-              const px = Math.cos(angle) * r;
-              const py = Math.sin(angle) * r;
-              if (i === 0) ctx.moveTo(px, py);
-              else ctx.lineTo(px, py);
-            }
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            break;
-        }
+  #define PI 3.14159265359
 
-        ctx.restore();
-      },
-      []
+  void main() {
+    vec2 center = vec2(0.5, 0.5);
+    vec2 uv = vUv - center;
+
+    float r = length(uv) * 2.0;
+    float theta = atan(uv.y, uv.x);
+
+    float sectorAngle = (2.0 * PI) / uMirrorCount;
+    float sectorIndex = floor(theta / sectorAngle);
+    float sectorTheta = mod(theta, sectorAngle);
+
+    float isOdd = mod(sectorIndex, 2.0);
+    if (isOdd > 0.5) {
+      sectorTheta = sectorAngle - sectorTheta;
+    }
+
+    float sampleTheta = sectorTheta + (floor(uMirrorCount / 2.0) * sectorAngle);
+    sampleTheta += uTime * 0.05;
+
+    float sampleR = clamp(r, 0.0, 0.98);
+    vec2 sampleUv = vec2(
+      0.5 + sampleR * 0.5 * cos(sampleTheta),
+      0.5 + sampleR * 0.5 * sin(sampleTheta)
     );
 
-    const renderKaleidoscope = useCallback(
-      (ctx: CanvasRenderingContext2D, width: number, height: number, time: number) => {
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const maxRadius = Math.min(width, height) / 2;
+    vec4 color = texture2D(uTexture, sampleUv);
 
-        ctx.fillStyle = '#050810';
-        ctx.fillRect(0, 0, width, height);
+    float aberration = 0.002 * uGlowIntensity;
+    vec2 offsetR = vec2(aberration * cos(sampleTheta), aberration * sin(sampleTheta));
+    vec2 offsetB = vec2(-aberration * cos(sampleTheta), -aberration * sin(sampleTheta));
+    float rChannel = texture2D(uTexture, sampleUv + offsetR).r;
+    float bChannel = texture2D(uTexture, sampleUv + offsetB).b;
+    color.r = mix(color.r, rChannel, 0.5);
+    color.b = mix(color.b, bChannel, 0.5);
 
-        const bgGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxRadius);
-        bgGradient.addColorStop(0, 'rgba(18, 24, 61, 0.8)');
-        bgGradient.addColorStop(0.7, 'rgba(10, 14, 39, 0.9)');
-        bgGradient.addColorStop(1, 'rgba(5, 8, 16, 1)');
+    float edgeDist = 1.0 - smoothstep(0.92, 1.0, r);
+    color.rgb *= mix(0.6, 1.0, edgeDist);
+
+    float vignette = 1.0 - smoothstep(0.85, 1.1, r);
+    color.rgb *= mix(0.7, 1.0, vignette);
+
+    float glow = smoothstep(0.95, 1.0, r);
+    vec3 glowColor = mix(vec3(0.729, 0.404, 1.0), vec3(0.0, 0.941, 1.0), sin(uTime * 2.0) * 0.5 + 0.5);
+    color.rgb = mix(color.rgb, glowColor, glow * 0.6 * uGlowIntensity);
+
+    float alpha = smoothstep(1.0, 0.96, r);
+    gl_FragColor = vec4(color.rgb, alpha);
+  }
+`;
+
+interface KaleidoscopeShaderProps {
+  renderTarget: THREE.WebGLRenderTarget;
+}
+
+function KaleidoscopeShaderMesh({ renderTarget }: KaleidoscopeShaderProps) {
+  const mirrorCount = useKaleidoscopeStore((s) => s.mirrorConfig.count);
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+
+  useFrame(({ clock }) => {
+    if (materialRef.current) {
+      materialRef.current.uniforms.uTime.value = clock.getElapsedTime();
+    }
+  });
+
+  const uniforms = useMemo(
+    () => ({
+      uTexture: { value: renderTarget.texture },
+      uMirrorCount: { value: mirrorCount },
+      uTime: { value: 0 },
+      uGlowIntensity: { value: 0.8 },
+    }),
+    [renderTarget, mirrorCount],
+  );
+
+  useEffect(() => {
+    if (materialRef.current) {
+      materialRef.current.uniforms.uMirrorCount.value = mirrorCount;
+    }
+  }, [mirrorCount]);
+
+  return (
+    <mesh>
+      <planeGeometry args={[2, 2]} />
+      <shaderMaterial
+        ref={materialRef}
+        vertexShader={kaleidoscopeVertexShader}
+        fragmentShader={kaleidoscopeFragmentShader}
+        uniforms={uniforms}
+        transparent
+      />
+    </mesh>
+  );
+}
+
+interface InnerSceneRendererProps {
+  renderTarget: THREE.WebGLRenderTarget;
+}
+
+function InnerSceneRenderer({ renderTarget }: InnerSceneRendererProps) {
+  const { scene, gl, camera } = useThree();
+  const virtualScene = useRef(new THREE.Scene());
+  const virtualCamera = useRef(
+    new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 100),
+  );
+
+  useEffect(() => {
+    virtualCamera.current.position.set(0, 0, 8);
+    virtualCamera.current.lookAt(0, 0, 0);
+  }, []);
+
+  useFrame(() => {
+    virtualScene.current.background = new THREE.Color("#050810");
+    gl.setRenderTarget(renderTarget);
+    gl.render(virtualScene.current, virtualCamera.current);
+    gl.setRenderTarget(null);
+  });
+
+  return createPortal(<RenderObjects />, virtualScene.current);
+}
+
+export const KaleidoscopePattern = forwardRef<
+  KaleidoscopePatternHandle,
+  KaleidoscopePatternProps
+>(({ className, size = 420, onDropObject }, ref) => {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const { exportConfig, setExporting } = useKaleidoscopeStore();
+
+  const [renderTarget] = useState(() => {
+    const rt = new THREE.WebGLRenderTarget(1024, 1024, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+    });
+    rt.texture.generateMipmaps = true;
+    return rt;
+  });
+
+  const getSceneDropPosition = useCallback(
+    (clientX: number, clientY: number): [number, number, number] => {
+      if (!canvasWrapperRef.current) return [0, 0, 0];
+      const rect = canvasWrapperRef.current.getBoundingClientRect();
+      const x = ((clientX - rect.left) / rect.width - 0.5) * 2;
+      const y = (-(clientY - rect.top) / rect.height + 0.5) * 2;
+      const radius = Math.sqrt(x * x + y * y);
+      if (radius > 0.9) {
+        const angle = Math.atan2(y, x);
+        return [
+          Math.cos(angle) * 0.8,
+          Math.sin(angle) * 0.8,
+          (Math.random() - 0.5) * 0.8,
+        ];
+      }
+      return [x * 1.0, y * 1.0, (Math.random() - 0.5) * 0.8];
+    },
+    [],
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+      const objectType = e.dataTransfer.getData(
+        "application/kaleido-object",
+      ) as ObjectType;
+      if (objectType && onDropObject) {
+        const pos = getSceneDropPosition(e.clientX, e.clientY);
+        onDropObject(objectType, pos);
+      }
+    },
+    [onDropObject, getSceneDropPosition],
+  );
+
+  const exportImage = useCallback(
+    async (options?: {
+      width?: number;
+      height?: number;
+      format?: "png" | "jpg";
+      quality?: number;
+    }): Promise<string | null> => {
+      const canvas = canvasWrapperRef.current?.querySelector("canvas");
+      if (!canvas) {
+        console.error("Canvas not found");
+        return null;
+      }
+
+      setExporting(true);
+
+      try {
+        const width =
+          options?.width || RESOLUTION_MAP[exportConfig.resolution].width;
+        const height =
+          options?.height || RESOLUTION_MAP[exportConfig.resolution].height;
+        const format = options?.format || exportConfig.format;
+        const quality = options?.quality ?? exportConfig.quality;
+
+        const sourceSize = Math.min(canvas.width, canvas.height);
+        const exportCanvas = document.createElement("canvas");
+        exportCanvas.width = width;
+        exportCanvas.height = height;
+        const ctx = exportCanvas.getContext("2d");
+
+        if (!ctx) throw new Error("Could not get 2D context");
+
+        const bgGradient = ctx.createRadialGradient(
+          width / 2,
+          height / 2,
+          0,
+          width / 2,
+          height / 2,
+          Math.max(width, height) / 2,
+        );
+        bgGradient.addColorStop(0, "#0a0e27");
+        bgGradient.addColorStop(1, "#050810");
         ctx.fillStyle = bgGradient;
         ctx.fillRect(0, 0, width, height);
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, maxRadius * 0.98, 0, Math.PI * 2);
-        ctx.clip();
+        const sx = (canvas.width - sourceSize) / 2;
+        const sy = (canvas.height - sourceSize) / 2;
 
-        const mirrorCount = mirrorConfig.count;
-        const mirrorAngleRad = (mirrorConfig.angle * Math.PI) / 180;
-        const sectorAngle = (Math.PI * 2) / mirrorCount;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
 
-        const baseRotation = rotationConfig.autoRotate
-          ? time * rotationConfig.speed * rotationConfig.direction * 0.5
-          : mirrorAngleRad;
+        const outputSize = Math.min(width, height);
+        const dx = (width - outputSize) / 2;
+        const dy = (height - outputSize) / 2;
 
-        for (let sector = 0; sector < mirrorCount; sector++) {
-          const sectorBaseAngle = sector * sectorAngle + baseRotation;
-
-          for (const obj of objects) {
-            const objScale = (obj.scale * maxRadius) / 4;
-            const objX = obj.position[0] * (maxRadius / 3);
-            const objY = obj.position[1] * (maxRadius / 3);
-            const objRotation =
-              obj.rotation[0] + obj.rotation[1] + time * 0.3 + (obj.position[2] * 0.5);
-
-            const pulseOffset = Math.sin(time * 1.5 + obj.position[2] * 2) * 0.05 + 1;
-
-            let drawX = objX * pulseOffset;
-            let drawY = objY * pulseOffset;
-
-            const angle1 = sectorBaseAngle;
-            const cos1 = Math.cos(angle1);
-            const sin1 = Math.sin(angle1);
-            const rotX1 = drawX * cos1 - drawY * sin1;
-            const rotY1 = drawX * sin1 + drawY * cos1;
-
-            drawShape(
-              ctx,
-              obj.type,
-              centerX + rotX1,
-              centerY + rotY1,
-              objScale * pulseOffset,
-              objRotation + angle1,
-              obj.color,
-              obj.emissive,
-              obj.emissiveIntensity
-            );
-
-            const angle2 = sectorBaseAngle + sectorAngle;
-            const reflectX = drawX;
-            const reflectY = -drawY;
-            const cos2 = Math.cos(angle2);
-            const sin2 = Math.sin(angle2);
-            const rotX2 = reflectX * cos2 - reflectY * sin2;
-            const rotY2 = reflectX * sin2 + reflectY * cos2;
-
-            drawShape(
-              ctx,
-              obj.type,
-              centerX + rotX2,
-              centerY + rotY2,
-              objScale * pulseOffset,
-              -objRotation + angle2,
-              obj.color,
-              obj.emissive,
-              obj.emissiveIntensity
-            );
-          }
-        }
-
-        ctx.restore();
-
-        const ringGradient = ctx.createRadialGradient(
-          centerX, centerY, maxRadius * 0.92,
-          centerX, centerY, maxRadius
+        ctx.drawImage(
+          canvas,
+          sx,
+          sy,
+          sourceSize,
+          sourceSize,
+          dx,
+          dy,
+          outputSize,
+          outputSize,
         );
-        ringGradient.addColorStop(0, 'rgba(185, 103, 255, 0)');
-        ringGradient.addColorStop(0.5, `rgba(185, 103, 255, ${0.3 + Math.sin(time * 2) * 0.1})`);
-        ringGradient.addColorStop(0.7, `rgba(0, 240, 255, ${0.4 + Math.sin(time * 2 + 1) * 0.1})`);
-        ringGradient.addColorStop(1, 'rgba(255, 45, 149, 0)');
 
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, maxRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = ringGradient;
-        ctx.lineWidth = maxRadius * 0.08;
-        ctx.stroke();
+        const mimeType = format === "png" ? "image/png" : "image/jpeg";
+        const dataUrl = exportCanvas.toDataURL(mimeType, quality);
 
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, maxRadius * 0.99, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(0, 240, 255, ${0.5 + Math.sin(time * 3) * 0.2})`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      },
-      [objects, mirrorConfig, rotationConfig, drawShape]
-    );
+        const link = document.createElement("a");
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        link.download = `kaleidoscope-${RESOLUTION_MAP[exportConfig.resolution].label}-${timestamp}.${format}`;
+        link.href = dataUrl;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
 
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const animate = () => {
-        timeRef.current += 0.016;
-        const dpr = window.devicePixelRatio || 1;
-        renderKaleidoscope(ctx, canvas.width / dpr, canvas.height / dpr, timeRef.current);
-        animationRef.current = requestAnimationFrame(animate);
-      };
-
-      animate();
-
-      return () => {
-        if (animationRef.current) {
-          cancelAnimationFrame(animationRef.current);
-        }
-      };
-    }, [renderKaleidoscope]);
-
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = size * dpr;
-      canvas.height = size * dpr;
-      canvas.style.width = `${size}px`;
-      canvas.style.height = `${size}px`;
-
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.scale(dpr, dpr);
+        return dataUrl;
+      } catch (error) {
+        console.error("Export failed:", error);
+        return null;
+      } finally {
+        setTimeout(() => setExporting(false), 500);
       }
-    }, [size]);
+    },
+    [exportConfig, setExporting],
+  );
 
-    const exportImage = useCallback(
-      async (
-        options?: {
-          width?: number;
-          height?: number;
-          format?: 'png' | 'jpg';
-          quality?: number;
-        }
-      ): Promise<string | null> => {
-        setExporting(true);
+  useImperativeHandle(
+    ref,
+    () => ({
+      exportImage,
+      getCanvas: () =>
+        canvasWrapperRef.current?.querySelector("canvas") || null,
+      getSceneDropPosition,
+    }),
+    [exportImage, getSceneDropPosition],
+  );
 
-        try {
-          const width = options?.width || RESOLUTION_MAP[exportConfig.resolution].width;
-          const height = options?.height || RESOLUTION_MAP[exportConfig.resolution].height;
-          const format = options?.format || exportConfig.format;
-          const quality = options?.quality ?? exportConfig.quality;
-
-          const exportCanvas = document.createElement('canvas');
-          exportCanvas.width = width;
-          exportCanvas.height = height;
-          const ctx = exportCanvas.getContext('2d');
-
-          if (!ctx) {
-            throw new Error('Could not get 2D context');
-          }
-
-          const bgGradient = ctx.createRadialGradient(
-            width / 2, height / 2, 0,
-            width / 2, height / 2, Math.max(width, height) / 2
-          );
-          bgGradient.addColorStop(0, '#0a0e27');
-          bgGradient.addColorStop(1, '#050810');
-          ctx.fillStyle = bgGradient;
-          ctx.fillRect(0, 0, width, height);
-
-          renderKaleidoscope(ctx, width, height, timeRef.current);
-
-          const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
-          const dataUrl = exportCanvas.toDataURL(mimeType, quality);
-
-          const link = document.createElement('a');
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          link.download = `kaleidoscope-${RESOLUTION_MAP[exportConfig.resolution].label}-${timestamp}.${format}`;
-          link.href = dataUrl;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          return dataUrl;
-        } catch (error) {
-          console.error('Export failed:', error);
-          return null;
-        } finally {
-          setTimeout(() => setExporting(false), 500);
-        }
-      },
-      [exportConfig, renderKaleidoscope, setExporting]
-    );
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        exportImage,
-        getCanvas: () => canvasRef.current,
-      }),
-      [exportImage]
-    );
-
-    return (
-      <div
-        className={`relative rounded-full overflow-hidden ${className || ''}`}
-        style={{
-          width: size,
-          height: size,
-          boxShadow: `
-            0 0 30px rgba(185, 103, 255, 0.4),
-            0 0 60px rgba(0, 240, 255, 0.2),
-            inset 0 0 30px rgba(0, 0, 0, 0.5)
-          `,
-        }}
-      >
-        <canvas
-          ref={canvasRef}
-          className="w-full h-full rounded-full"
-        />
-        <div
-          className="absolute inset-0 rounded-full pointer-events-none"
-          style={{
-            background: 'radial-gradient(circle, transparent 60%, rgba(5, 8, 16, 0.4) 100%)',
-          }}
-        />
+  return (
+    <div
+      ref={wrapperRef}
+      className={`relative rounded-full overflow-hidden transition-all duration-300 ${className || ""} ${
+        isDragOver ? "ring-4 ring-kaleido-green/60 scale-105" : ""
+      }`}
+      style={{
+        width: size,
+        height: size,
+        boxShadow: isDragOver
+          ? `
+              0 0 40px rgba(57, 255, 20, 0.5),
+              0 0 80px rgba(57, 255, 20, 0.2),
+              inset 0 0 30px rgba(57, 255, 20, 0.1)
+            `
+          : `
+              0 0 30px rgba(185, 103, 255, 0.4),
+              0 0 60px rgba(0, 240, 255, 0.2),
+              inset 0 0 30px rgba(0, 0, 0, 0.5)
+            `,
+      }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <div ref={canvasWrapperRef} className="w-full h-full">
+        <Canvas
+          camera={{ position: [0, 0, 2], fov: 0 }}
+          gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
+          dpr={[1, 2]}
+        >
+          <color attach="background" args={["#050810"]} />
+          <InnerSceneRenderer renderTarget={renderTarget} />
+          <KaleidoscopeShaderMesh renderTarget={renderTarget} />
+        </Canvas>
       </div>
-    );
-  }
-);
 
-KaleidoscopePattern.displayName = 'KaleidoscopePattern';
+      {isDragOver && (
+        <div className="absolute inset-0 rounded-full pointer-events-none flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="text-center animate-pulse">
+            <div className="text-4xl mb-2">✨</div>
+            <p className="font-display text-lg text-kaleido-green neon-text font-bold">
+              释放以添加物体
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div
+        className="absolute inset-0 rounded-full pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(circle, transparent 55%, rgba(5, 8, 16, 0.5) 100%)",
+        }}
+      />
+    </div>
+  );
+});
+
+KaleidoscopePattern.displayName = "KaleidoscopePattern";
 
 export default KaleidoscopePattern;
