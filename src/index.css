@@ -1,0 +1,151 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --kaleido-bg: #0a0e27;
+  --kaleido-bg-light: #12183d;
+  --kaleido-pink: #ff2d95;
+  --kaleido-blue: #00f0ff;
+  --kaleido-purple: #b967ff;
+  --kaleido-yellow: #ffd700;
+  --kaleido-green: #39ff14;
+
+  font-family: 'Inter', system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.9);
+  background-color: var(--kaleido-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--kaleido-bg);
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl;
+  }
+
+  .glass-button {
+    @apply px-4 py-2 rounded-xl bg-white/10 backdrop-blur-md border border-white/20
+           text-white font-medium transition-all duration-300
+           hover:bg-white/20 hover:border-white/30 hover:shadow-glow-purple
+           active:scale-95;
+  }
+
+  .glass-button-primary {
+    @apply px-4 py-2 rounded-xl font-medium transition-all duration-300
+           bg-gradient-to-r from-kaleido-purple to-kaleido-blue
+           text-white shadow-glow-purple hover:shadow-glow-strong
+           active:scale-95;
+  }
+
+  .slider-track {
+    @apply h-2 rounded-full bg-gradient-to-r from-kaleido-purple via-kaleido-pink to-kaleido-blue;
+  }
+
+  .slider-thumb {
+    @apply w-5 h-5 rounded-full bg-white shadow-lg border-2 border-kaleido-purple
+           transition-all duration-200 hover:scale-110 hover:shadow-glow-pink;
+  }
+
+  .neon-text {
+    text-shadow: 0 0 10px currentColor, 0 0 20px currentColor, 0 0 40px currentColor;
+  }
+
+  .neon-border {
+    box-shadow: 0 0 10px rgba(185, 103, 255, 0.5),
+                inset 0 0 10px rgba(0, 240, 255, 0.1);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--kaleido-purple), var(--kaleido-blue));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--kaleido-pink), var(--kaleido-purple));
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+}
+
+input[type="range"]::-webkit-slider-track {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--kaleido-purple), var(--kaleido-pink), var(--kaleido-blue));
+  opacity: 0.6;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--kaleido-purple);
+  box-shadow: 0 0 10px rgba(185, 103, 255, 0.6);
+  margin-top: -6px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 20px rgba(255, 45, 149, 0.8);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--kaleido-purple), var(--kaleido-pink), var(--kaleido-blue));
+  opacity: 0.6;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--kaleido-purple);
+  box-shadow: 0 0 10px rgba(185, 103, 255, 0.6);
+}
