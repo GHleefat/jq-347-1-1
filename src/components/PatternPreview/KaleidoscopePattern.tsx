@@ -56,24 +56,71 @@ const ObjectGeometry = ({ type }: { type: ObjectType }) => {
   }
 };
 
-function RenderObjects() {
-  const objects = useKaleidoscopeStore((s) => s.objects);
-  const rotationConfig = useKaleidoscopeStore((s) => s.rotationConfig);
-  const mirrorConfig = useKaleidoscopeStore((s) => s.mirrorConfig);
-  const groupRef = useRef<THREE.Group>(null);
+function InnerObjectMesh({
+  obj,
+  position,
+}: {
+  obj: KaleidoObject;
+  position?: [number, number, number];
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const initialSeed = useRef(Math.random() * Math.PI * 2);
 
-  useFrame((_, delta) => {
-    if (groupRef.current && rotationConfig.autoRotate) {
-      groupRef.current.rotation.z +=
-        delta * rotationConfig.speed * rotationConfig.direction * 0.5;
+  useFrame(({ clock }) => {
+    if (meshRef.current) {
+      const t = clock.getElapsedTime() + initialSeed.current;
+      meshRef.current.rotation.x += 0.005;
+      meshRef.current.rotation.y += 0.007;
+      meshRef.current.position.z =
+        (position?.[2] ?? obj.position[2]) + Math.sin(t * 1.2) * 0.05;
     }
   });
 
-  const mirrorAngleRad = (mirrorConfig.angle * Math.PI) / 180;
+  const pos = position ?? obj.position;
 
   return (
-    <group ref={groupRef} rotation={[0, 0, mirrorAngleRad]}>
-      <ambientLight intensity={0.4} />
+    <mesh
+      ref={meshRef}
+      position={pos}
+      rotation={[obj.rotation[0], obj.rotation[1], obj.rotation[2]]}
+      scale={obj.scale}
+    >
+      <ObjectGeometry type={obj.type} />
+      <meshStandardMaterial
+        color={obj.color}
+        emissive={obj.emissive}
+        emissiveIntensity={obj.emissiveIntensity}
+        roughness={obj.roughness}
+        metalness={obj.metalness}
+      />
+    </mesh>
+  );
+}
+
+function InnerSceneContent() {
+  const objects = useKaleidoscopeStore((s) => s.objects);
+  const mirrorConfig = useKaleidoscopeStore((s) => s.mirrorConfig);
+  const groupRef = useRef<THREE.Group>(null);
+
+  const sectorAngle = (Math.PI * 2) / mirrorConfig.count;
+
+  const getMappedPosition = (
+    pos: [number, number, number],
+  ): [number, number, number] => {
+    const [x, y, z] = pos;
+    const r = Math.sqrt(x * x + y * y) * 0.7;
+    const theta = Math.atan2(y, x);
+    let mappedTheta = theta % sectorAngle;
+    if (mappedTheta > sectorAngle / 2) mappedTheta -= sectorAngle;
+    if (mappedTheta < -sectorAngle / 2) mappedTheta += sectorAngle;
+    const newX = r * Math.cos(mappedTheta);
+    const newY = r * Math.sin(mappedTheta);
+    return [newX, newY, z];
+  };
+
+  return (
+    <group ref={groupRef}>
+      <ambientLight intensity={0.35} />
       <pointLight
         position={[0, 0, 4]}
         intensity={3}
@@ -106,47 +153,13 @@ function RenderObjects() {
       />
 
       {objects.map((obj) => (
-        <SingleObjectMesh key={obj.id} obj={obj} />
+        <InnerObjectMesh
+          key={obj.id}
+          obj={obj}
+          position={getMappedPosition(obj.position)}
+        />
       ))}
     </group>
-  );
-}
-
-function SingleObjectMesh({ obj }: { obj: KaleidoObject }) {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const initialSeed = useRef(Math.random() * Math.PI * 2);
-
-  useFrame(({ clock }) => {
-    if (meshRef.current) {
-      const t = clock.getElapsedTime() + initialSeed.current;
-      meshRef.current.rotation.x += 0.005;
-      meshRef.current.rotation.y += 0.007;
-      meshRef.current.position.z = obj.position[2] + Math.sin(t * 1.2) * 0.05;
-    }
-  });
-
-  const basePos: [number, number, number] = [
-    obj.position[0],
-    obj.position[1],
-    obj.position[2],
-  ];
-  const baseRot: [number, number, number] = [
-    obj.rotation[0],
-    obj.rotation[1],
-    obj.rotation[2],
-  ];
-
-  return (
-    <mesh ref={meshRef} position={basePos} rotation={baseRot} scale={obj.scale}>
-      <ObjectGeometry type={obj.type} />
-      <meshStandardMaterial
-        color={obj.color}
-        emissive={obj.emissive}
-        emissiveIntensity={obj.emissiveIntensity}
-        roughness={obj.roughness}
-        metalness={obj.metalness}
-      />
-    </mesh>
   );
 }
 
@@ -163,6 +176,7 @@ const kaleidoscopeFragmentShader = `
   uniform float uMirrorCount;
   uniform float uTime;
   uniform float uGlowIntensity;
+  uniform float uRotation;
   varying vec2 vUv;
 
   #define PI 3.14159265359
@@ -171,8 +185,15 @@ const kaleidoscopeFragmentShader = `
     vec2 center = vec2(0.5, 0.5);
     vec2 uv = vUv - center;
 
-    float r = length(uv) * 2.0;
-    float theta = atan(uv.y, uv.x);
+    float cosR = cos(uRotation);
+    float sinR = sin(uRotation);
+    vec2 rotatedUv = vec2(
+      uv.x * cosR - uv.y * sinR,
+      uv.x * sinR + uv.y * cosR
+    );
+
+    float r = length(rotatedUv) * 2.0;
+    float theta = atan(rotatedUv.y, rotatedUv.x);
 
     float sectorAngle = (2.0 * PI) / uMirrorCount;
     float sectorIndex = floor(theta / sectorAngle);
@@ -183,13 +204,12 @@ const kaleidoscopeFragmentShader = `
       sectorTheta = sectorAngle - sectorTheta;
     }
 
-    float sampleTheta = sectorTheta + (floor(uMirrorCount / 2.0) * sectorAngle);
-    sampleTheta += uTime * 0.05;
+    float sampleTheta = sectorTheta - (sectorAngle * 0.5);
 
     float sampleR = clamp(r, 0.0, 0.98);
     vec2 sampleUv = vec2(
-      0.5 + sampleR * 0.5 * cos(sampleTheta),
-      0.5 + sampleR * 0.5 * sin(sampleTheta)
+      0.5 + sampleR * cos(sampleTheta) * 0.5,
+      0.5 + sampleR * sin(sampleTheta) * 0.5
     );
 
     vec4 color = texture2D(uTexture, sampleUv);
@@ -217,74 +237,101 @@ const kaleidoscopeFragmentShader = `
   }
 `;
 
-interface KaleidoscopeShaderProps {
+function KaleidoscopeShaderMesh({
+  renderTarget,
+}: {
   renderTarget: THREE.WebGLRenderTarget;
-}
-
-function KaleidoscopeShaderMesh({ renderTarget }: KaleidoscopeShaderProps) {
-  const mirrorCount = useKaleidoscopeStore((s) => s.mirrorConfig.count);
+}) {
+  const mirrorConfig = useKaleidoscopeStore((s) => s.mirrorConfig);
+  const rotationConfig = useKaleidoscopeStore((s) => s.rotationConfig);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
-
-  useFrame(({ clock }) => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = clock.getElapsedTime();
-    }
-  });
+  const rotationRef = useRef(0);
 
   const uniforms = useMemo(
     () => ({
       uTexture: { value: renderTarget.texture },
-      uMirrorCount: { value: mirrorCount },
+      uMirrorCount: { value: mirrorConfig.count },
       uTime: { value: 0 },
       uGlowIntensity: { value: 0.8 },
+      uRotation: { value: 0 },
     }),
-    [renderTarget, mirrorCount],
+    [renderTarget],
   );
+
+  useFrame(({ clock }, delta) => {
+    if (materialRef.current) {
+      materialRef.current.uniforms.uTime.value = clock.getElapsedTime();
+
+      if (rotationConfig.autoRotate) {
+        rotationRef.current +=
+          delta * rotationConfig.speed * rotationConfig.direction * 0.5;
+      }
+
+      const mirrorAngleRad = (mirrorConfig.angle * Math.PI) / 180;
+      materialRef.current.uniforms.uRotation.value =
+        mirrorAngleRad + rotationRef.current;
+    }
+  });
 
   useEffect(() => {
     if (materialRef.current) {
-      materialRef.current.uniforms.uMirrorCount.value = mirrorCount;
+      materialRef.current.uniforms.uMirrorCount.value = mirrorConfig.count;
     }
-  }, [mirrorCount]);
+  }, [mirrorConfig.count]);
 
   return (
     <mesh>
-      <planeGeometry args={[2, 2]} />
+      <planeGeometry args={[5, 5]} />
       <shaderMaterial
         ref={materialRef}
         vertexShader={kaleidoscopeVertexShader}
         fragmentShader={kaleidoscopeFragmentShader}
         uniforms={uniforms}
         transparent
+        depthTest={false}
+        depthWrite={false}
+        side={THREE.DoubleSide}
       />
     </mesh>
   );
 }
 
-interface InnerSceneRendererProps {
+function SceneRenderer({
+  renderTarget,
+}: {
   renderTarget: THREE.WebGLRenderTarget;
-}
+}) {
+  const { gl } = useThree();
 
-function InnerSceneRenderer({ renderTarget }: InnerSceneRendererProps) {
-  const { scene, gl, camera } = useThree();
-  const virtualScene = useRef(new THREE.Scene());
-  const virtualCamera = useRef(
-    new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 100),
-  );
-
-  useEffect(() => {
-    virtualCamera.current.position.set(0, 0, 8);
-    virtualCamera.current.lookAt(0, 0, 0);
+  const { virtualScene, virtualCamera } = useMemo(() => {
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#050810");
+    const camera = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 100);
+    camera.position.set(0, 0, 8);
+    camera.lookAt(0, 0, 0);
+    return { virtualScene: scene, virtualCamera: camera };
   }, []);
 
   useFrame(() => {
-    virtualScene.current.background = new THREE.Color("#050810");
     gl.setRenderTarget(renderTarget);
-    gl.render(virtualScene.current, virtualCamera.current);
+    gl.render(virtualScene, virtualCamera);
     gl.setRenderTarget(null);
-  });
+  }, -100);
 
-  return createPortal(<RenderObjects />, virtualScene.current);
+  return createPortal(<InnerSceneContent />, virtualScene);
+}
+
+function KaleidoscopeOutput({
+  renderTarget,
+}: {
+  renderTarget: THREE.WebGLRenderTarget;
+}) {
+  return (
+    <>
+      <SceneRenderer renderTarget={renderTarget} />
+      <KaleidoscopeShaderMesh renderTarget={renderTarget} />
+    </>
+  );
 }
 
 export const KaleidoscopePattern = forwardRef<
@@ -303,7 +350,7 @@ export const KaleidoscopePattern = forwardRef<
       format: THREE.RGBAFormat,
       type: THREE.UnsignedByteType,
     });
-    rt.texture.generateMipmaps = true;
+    rt.texture.generateMipmaps = false;
     return rt;
   });
 
@@ -311,18 +358,32 @@ export const KaleidoscopePattern = forwardRef<
     (clientX: number, clientY: number): [number, number, number] => {
       if (!canvasWrapperRef.current) return [0, 0, 0];
       const rect = canvasWrapperRef.current.getBoundingClientRect();
-      const x = ((clientX - rect.left) / rect.width - 0.5) * 2;
-      const y = (-(clientY - rect.top) / rect.height + 0.5) * 2;
-      const radius = Math.sqrt(x * x + y * y);
-      if (radius > 0.9) {
-        const angle = Math.atan2(y, x);
-        return [
-          Math.cos(angle) * 0.8,
-          Math.sin(angle) * 0.8,
-          (Math.random() - 0.5) * 0.8,
-        ];
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const radius = Math.min(rect.width, rect.height) / 2;
+
+      const dx = clientX - centerX;
+      const dy = clientY - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const normalizedDist = dist / radius;
+
+      const sceneRadius = 1.2;
+      let x = (dx / radius) * sceneRadius;
+      let y = (-dy / radius) * sceneRadius;
+
+      if (normalizedDist > 0.95) {
+        const angle = Math.atan2(-dy, dx);
+        const clampedR = sceneRadius * 0.85;
+        x = Math.cos(angle) * clampedR;
+        y = Math.sin(angle) * clampedR;
       }
-      return [x * 1.0, y * 1.0, (Math.random() - 0.5) * 0.8];
+
+      const jitterAmount = 0.08;
+      const jitterX = (Math.random() - 0.5) * 2 * jitterAmount;
+      const jitterY = (Math.random() - 0.5) * 2 * jitterAmount;
+      const jitterZ = (Math.random() - 0.5) * 0.8;
+
+      return [x + jitterX, y + jitterY, jitterZ];
     },
     [],
   );
@@ -454,9 +515,9 @@ export const KaleidoscopePattern = forwardRef<
   return (
     <div
       ref={wrapperRef}
-      className={`relative rounded-full overflow-hidden transition-all duration-300 ${className || ""} ${
-        isDragOver ? "ring-4 ring-kaleido-green/60 scale-105" : ""
-      }`}
+      className={`relative rounded-full overflow-hidden transition-all duration-300 ${
+        className || ""
+      } ${isDragOver ? "ring-4 ring-kaleido-green/60 scale-105" : ""}`}
       style={{
         width: size,
         height: size,
@@ -478,13 +539,12 @@ export const KaleidoscopePattern = forwardRef<
     >
       <div ref={canvasWrapperRef} className="w-full h-full">
         <Canvas
-          camera={{ position: [0, 0, 2], fov: 0 }}
+          camera={{ position: [0, 0, 5], fov: 50 }}
           gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
           dpr={[1, 2]}
         >
           <color attach="background" args={["#050810"]} />
-          <InnerSceneRenderer renderTarget={renderTarget} />
-          <KaleidoscopeShaderMesh renderTarget={renderTarget} />
+          <KaleidoscopeOutput renderTarget={renderTarget} />
         </Canvas>
       </div>
 

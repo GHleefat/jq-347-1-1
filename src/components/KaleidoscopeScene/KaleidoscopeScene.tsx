@@ -74,19 +74,32 @@ export function KaleidoscopeScene({
     (clientX: number, clientY: number): [number, number, number] => {
       if (!wrapperRef.current) return [0, 0, 0];
       const rect = wrapperRef.current.getBoundingClientRect();
-      const x = ((clientX - rect.left) / rect.width - 0.5) * 2;
-      const y = (-(clientY - rect.top) / rect.height + 0.5) * 2;
-      const radius = Math.sqrt(x * x + y * y);
-      const maxRadius = 1.8;
-      if (radius > maxRadius) {
-        const angle = Math.atan2(y, x);
-        return [
-          Math.cos(angle) * maxRadius * 0.6,
-          Math.sin(angle) * maxRadius * 0.6,
-          (Math.random() - 0.5) * 1.5,
-        ];
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const viewportRadius = Math.min(rect.width, rect.height) / 2.5;
+
+      const dx = clientX - centerX;
+      const dy = clientY - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const normalizedDist = dist / viewportRadius;
+
+      const sceneRadius = 1.6;
+      let x = (dx / viewportRadius) * sceneRadius;
+      let y = (-dy / viewportRadius) * sceneRadius;
+
+      if (normalizedDist > 1.0) {
+        const angle = Math.atan2(-dy, dx);
+        const clampedR = sceneRadius * 0.8;
+        x = Math.cos(angle) * clampedR;
+        y = Math.sin(angle) * clampedR;
       }
-      return [x * 1.4, y * 1.4, (Math.random() - 0.5) * 1.5];
+
+      const jitterAmount = 0.15;
+      const jitterX = (Math.random() - 0.5) * 2 * jitterAmount;
+      const jitterY = (Math.random() - 0.5) * 2 * jitterAmount;
+      const jitterZ = (Math.random() - 0.5) * 1.2;
+
+      return [x + jitterX, y + jitterY, jitterZ];
     },
     [],
   );
